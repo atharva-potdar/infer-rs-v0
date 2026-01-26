@@ -1,4 +1,4 @@
-use ort::{session::builder::GraphOptimizationLevel, session::Session, value::Tensor};
+use ort::{session::Session, session::builder::GraphOptimizationLevel, value::Tensor};
 use std::fs::File;
 use std::io::Read;
 fn load_npy_data(path: &str) -> Vec<f32> {
@@ -37,7 +37,10 @@ fn test_verify_model_ort() -> anyhow::Result<()> {
     for (i, (actual, expected)) in actual_output.iter().zip(golden_output.iter()).enumerate() {
         let diff = (actual - expected).abs();
         if diff >= tolerance {
-            panic!("Mismatch at {}: Actual {}, Expected {}, Diff {}", i, actual, expected, diff);
+            panic!(
+                "Mismatch at {}: Actual {}, Expected {}, Diff {}",
+                i, actual, expected, diff
+            );
         }
     }
     println!("SUCCESS: ORT matches golden output within tolerance.");
