@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package inference.v1;
+
+service RpcInferenceService {
+  rpc RpcInference(RpcInferenceRequest) returns (RpcInferenceResponse);
+}
+
+message RpcInferenceRequest {
+  repeated float tensor = 1;
+  repeated int32 shape = 2;
+}
+
+message RpcInferenceResponse {
+  repeated float output = 1;
+}
