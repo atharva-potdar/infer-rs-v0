@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
-burn = { version = "0.20.1", features = ["wgpu", "fusion"] }
+burn = { version = "0.20.1", default-features = false, features = ["ndarray", "fusion", "openblas-system", "autotune"] }
 prost = "0.14.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -13,8 +13,8 @@ tokio = { version = "1.49.0", features = ["full"] }
 tonic = "0.14.2"
 
 [build-dependencies]
-burn-import = "0.20.1"
-tonic-build = "0.14.2"
+burn-import = { version = "0.20.1", default-features = false, features = ["onnx"] }
+tonic-prost-build = "0.14.2"
 
 [dev-dependencies]
 npy = "0.4.0"
