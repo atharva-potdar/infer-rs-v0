@@ -1,40 +1,62 @@
 use anyhow::Result;
+use ndarray::IxDyn;
 use ort::{session::Session, session::builder::GraphOptimizationLevel, value::TensorRef};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::{mpsc, oneshot};
 use tonic::{Request, Response, Status};
 
 tonic::include_proto!("inference.v1");
 
 const MODEL_PATH: &str = "model_artifacts/mnist_cnn.onnx";
 
-/// Creates one single-threaded ORT session per logical core.
-///
-/// `Session::run` requires `&mut self`, so a single shared session serializes
-/// all inference behind one lock. Multiple sessions with `intra_threads=1`
-/// allow true parallelism without oversubscribing OS threads.
-async fn load_sessions() -> Result<Vec<Mutex<Session>>> {
-    let num_cores = std::thread::available_parallelism()?.get();
-    println!(
-        "Detected {} cores. Creating {} inference sessions...",
-        num_cores, num_cores
-    );
+struct InferenceJob {
+    arr: ndarray::Array<f32, IxDyn>,
+    reply: oneshot::Sender<Result<Vec<f32>, String>>,
+}
 
-    let mut sessions = Vec::with_capacity(num_cores);
-    for i in 0..num_cores {
-        let session = Session::builder()?
+fn spawn_workers(num_workers: usize) -> Result<Vec<mpsc::Sender<InferenceJob>>> {
+    let mut senders = Vec::with_capacity(num_workers);
+
+    for i in 0..num_workers {
+        let mut session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .with_intra_threads(1)?
             .commit_from_file(MODEL_PATH)?;
-        sessions.push(Mutex::new(session));
         println!("Session {} initialized.", i + 1);
+
+        let (tx, mut rx) = mpsc::channel::<InferenceJob>(256);
+
+        std::thread::spawn(move || {
+            while let Some(job) = rx.blocking_recv() {
+                let result = (|| {
+                    let input_value = TensorRef::from_array_view(&job.arr)
+                        .map_err(|e| format!("ort tensor error: {}", e))?;
+
+                    let outputs = session
+                        .run(ort::inputs![input_value])
+                        .map_err(|e| format!("session run error: {}", e))?;
+
+                    let (_shape, out_slice) = outputs[0]
+                        .try_extract_tensor::<f32>()
+                        .map_err(|e| format!("extract error: {}", e))?;
+
+                    Ok(out_slice.to_vec())
+                })();
+
+                let _ = job.reply.send(result);
+            }
+        });
+
+        senders.push(tx);
     }
-    Ok(sessions)
+
+    Ok(senders)
 }
 
 #[derive(Clone)]
 struct InferenceService {
-    sessions: Arc<Vec<Mutex<Session>>>,
+    workers: Arc<Vec<mpsc::Sender<InferenceJob>>>,
     counter: Arc<AtomicUsize>,
 }
 
@@ -61,32 +83,18 @@ impl rpc_inference_service_server::RpcInferenceService for InferenceService {
         let arr = ndarray::Array::from_shape_vec(shape_usize, req.tensor)
             .map_err(|e| Status::internal(format!("ndarray error: {}", e)))?;
 
-        // Round-robin across sessions.
-        let idx = self.counter.fetch_add(1, Ordering::Relaxed) % self.sessions.len();
-        let sessions_arc = self.sessions.clone();
+        let idx = self.counter.fetch_add(1, Ordering::Relaxed) % self.workers.len();
+        let (tx, rx) = oneshot::channel();
 
-        // Offload CPU-bound inference to avoid blocking the async executor.
-        let output_vec = tokio::task::spawn_blocking(move || {
-            let input_value = TensorRef::from_array_view(&arr)
-                .map_err(|e| anyhow::anyhow!("ort tensor error: {}", e))?;
+        self.workers[idx]
+            .send(InferenceJob { arr, reply: tx })
+            .await
+            .map_err(|_| Status::internal("Worker thread died"))?;
 
-            let mut session = sessions_arc[idx]
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-
-            let outputs = session
-                .run(ort::inputs![input_value])
-                .map_err(|e| anyhow::anyhow!("session run error: {}", e))?;
-
-            let (_shape, out_slice) = outputs[0]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| anyhow::anyhow!("extract error: {}", e))?;
-
-            Ok::<Vec<f32>, anyhow::Error>(out_slice.to_vec())
-        })
-        .await
-        .map_err(|e| Status::internal(format!("Tokio Join error: {}", e)))?
-        .map_err(|e| Status::internal(format!("Inference error: {}", e)))?;
+        let output_vec = rx
+            .await
+            .map_err(|_| Status::internal("Worker dropped response"))?
+            .map_err(|e| Status::internal(e))?;
 
         Ok(Response::new(RpcInferenceResponse { output: output_vec }))
     }
@@ -94,11 +102,17 @@ impl rpc_inference_service_server::RpcInferenceService for InferenceService {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let sessions = load_sessions().await?;
-    println!("Session pool ready.");
+    let num_cores = std::thread::available_parallelism()?.get();
+    println!(
+        "Detected {} cores. Spawning {} inference workers...",
+        num_cores, num_cores
+    );
+
+    let workers = spawn_workers(num_cores)?;
+    println!("Worker pool ready.");
 
     let svc = InferenceService {
-        sessions: Arc::new(sessions),
+        workers: Arc::new(workers),
         counter: Arc::new(AtomicUsize::new(0)),
     };
 
