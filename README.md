@@ -16,6 +16,7 @@ ghz --insecure \
     0.0.0.0:50051
 ```
 
+```
 Summary:
   Count:	894743
   Total:	30.00 s
@@ -32,6 +33,7 @@ Latency distribution:
   90 % in 7.46 ms 
   95 % in 8.88 ms 
   99 % in 12.14 ms
+```
 
 ## Latency test
 ```
@@ -44,6 +46,7 @@ ghz --insecure \
     0.0.0.0:50051
 ```
 
+```
 Summary:
   Count:	10000
   Total:	5.68 s
@@ -60,3 +63,4 @@ Latency distribution:
   90 % in 0.48 ms 
   95 % in 0.56 ms 
   **99 % in 1.08 ms**
+```
