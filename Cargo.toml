@@ -16,3 +16,9 @@ tonic-prost = "0.14.2"
 
 [build-dependencies]
 tonic-prost-build = "0.14.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

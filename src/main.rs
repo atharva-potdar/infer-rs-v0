@@ -106,6 +106,7 @@ async fn main() -> Result<()> {
     println!("Serving gRPC on {}", addr);
 
     tonic::transport::Server::builder()
+        .tcp_nodelay(true)
         .add_service(rpc_inference_service_server::RpcInferenceServiceServer::new(svc))
         .serve(addr)
         .await?;
